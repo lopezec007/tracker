@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//	tracker [-addr :8080] [-db tracker.db]
+//	tracker [-addr :8081] [-db tracker.db]
 //	tracker -version
 //
 // Environment variables TRACKER_ADDR and TRACKER_DB are used as defaults for
@@ -39,7 +39,7 @@ func envOr(key, def string) string {
 }
 
 func main() {
-	addr := flag.String("addr", envOr("TRACKER_ADDR", ":8080"), "listen address")
+	addr := flag.String("addr", envOr("TRACKER_ADDR", ":8081"), "listen address")
 	dbPath := flag.String("db", envOr("TRACKER_DB", "tracker.db"), "path to SQLite database file")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()

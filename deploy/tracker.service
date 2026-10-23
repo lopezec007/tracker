@@ -16,7 +16,7 @@ User=tracker
 Group=tracker
 
 # Defaults; values in the EnvironmentFile override these.
-Environment=TRACKER_ADDR=0.0.0.0:8080
+Environment=TRACKER_ADDR=0.0.0.0:8081
 Environment=TRACKER_DB=/var/lib/tracker/tracker.db
 EnvironmentFile=-/etc/tracker/tracker.env
 

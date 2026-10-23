@@ -96,7 +96,7 @@ fi
 
 # --- 6. Report ---------------------------------------------------------------
 addr=$(grep -E '^[[:space:]]*TRACKER_ADDR=' "$ENV_DST" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '"'"'" || true)
-addr=${addr:-0.0.0.0:8080}
+addr=${addr:-0.0.0.0:8081}
 host=${addr%:*}
 port=${addr##*:}
 if [[ -z "$host" || "$host" == "0.0.0.0" || "$host" == "[::]" || "$host" == "::" ]]; then

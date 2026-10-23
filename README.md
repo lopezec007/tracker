@@ -11,7 +11,7 @@ for the full requirements. This directory is the server; the app lives in
 Requires Go 1.26+. There is no web UI and no other toolchain.
 
     make build
-    ./tracker -addr :8080 -db /var/lib/tracker/tracker.db
+    ./tracker -addr :8081 -db /var/lib/tracker/tracker.db
 
 Flags can also be given as environment variables `TRACKER_ADDR` and
 `TRACKER_DB`; `tracker -version` prints the semantic version, its release date
@@ -139,7 +139,7 @@ the binary itself (`sudo make install`). The script is idempotent and:
 
 `/etc/tracker/tracker.env` holds `KEY=VALUE` lines read by systemd:
 
-    TRACKER_ADDR=0.0.0.0:8080            # listen address; default reaches the whole LAN
+    TRACKER_ADDR=0.0.0.0:8081            # listen address; default reaches the whole LAN
     TRACKER_DB=/var/lib/tracker/tracker.db
 
 Both are optional; the defaults above are built into the unit. After editing
@@ -217,13 +217,13 @@ Layout:
 Commands:
 
     make test             # go vet + unit tests
-    make run              # dev server on 127.0.0.1:8080 with dev.db
+    make run              # dev server on 127.0.0.1:8081 with dev.db
     make dist             # static linux/amd64 binary in dist/ (CGO_ENABLED=0)
     make install          # install as a systemd service on this host (root; see Deploying)
     make android          # debug APK; android-test, android-release, android-install likewise
 
 A quick manual check against a dev server:
 
-    curl -X PUT localhost:8080/api/entities/phone-1 -d '{"name":"Evan"}'
-    curl -X POST localhost:8080/api/entities/phone-1/fixes -d '[{"lat":45.5,"lon":-73.6}]'
-    curl localhost:8080/api/entities
+    curl -X PUT localhost:8081/api/entities/phone-1 -d '{"name":"Evan"}'
+    curl -X POST localhost:8081/api/entities/phone-1/fixes -d '[{"lat":45.5,"lon":-73.6}]'
+    curl localhost:8081/api/entities

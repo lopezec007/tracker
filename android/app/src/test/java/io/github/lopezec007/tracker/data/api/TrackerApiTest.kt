@@ -29,8 +29,8 @@ class TrackerApiTest {
 
     @Test
     fun parsesLooseAddresses() {
-        assertEquals("http://10.8.0.1:8080/", TrackerApi.parseBaseUrl("10.8.0.1:8080").toString())
-        assertEquals("http://tracker.lan:8080/", TrackerApi.parseBaseUrl(" tracker.lan:8080/ ").toString())
+        assertEquals("http://10.8.0.1:8081/", TrackerApi.parseBaseUrl("10.8.0.1:8081").toString())
+        assertEquals("http://tracker.lan:8081/", TrackerApi.parseBaseUrl(" tracker.lan:8081/ ").toString())
         assertEquals("https://x.example/", TrackerApi.parseBaseUrl("https://x.example").toString())
         assertNull(TrackerApi.parseBaseUrl(""))
         assertNull(TrackerApi.parseBaseUrl("ftp://x"))

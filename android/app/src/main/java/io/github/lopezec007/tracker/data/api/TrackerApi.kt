@@ -53,8 +53,8 @@ class TrackerApi(val baseUrl: HttpUrl, client: OkHttpClient? = null) {
         const val SOURCE_PHONE = "phone"
 
         /**
-         * Builds the base URL from what the user typed: "10.0.0.2:8080",
-         * "http://tracker.lan/", "tracker:8080". Returns null when it cannot
+         * Builds the base URL from what the user typed: "10.0.0.2:8081",
+         * "http://tracker.lan/", "tracker:8081". Returns null when it cannot
          * be parsed. Only http and https are accepted.
          */
         fun parseBaseUrl(text: String): HttpUrl? {

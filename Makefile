@@ -12,7 +12,7 @@ test:
 	go vet ./... && go test ./...
 
 run: build
-	./tracker -addr 127.0.0.1:8080 -db dev.db
+	./tracker -addr 127.0.0.1:8081 -db dev.db
 
 # Static linux/amd64 binary for deployment (the SQLite driver is pure Go, so
 # no cgo is needed and the result runs on any x86-64 Linux, including Debian 13).

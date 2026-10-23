@@ -129,7 +129,7 @@ fun SetupScreen(vm: TrackerViewModel, onDone: () -> Unit) {
             Text("Tracker", style = MaterialTheme.typography.headlineMedium)
             Spacer(Modifier.height(8.dp))
             Text(
-                "Enter the address of your tracker server. Examples: 10.8.0.1:8080 or tracker.lan:8080",
+                "Enter the address of your tracker server. Examples: 10.8.0.1:8081 or tracker.lan:8081",
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center,
             )
