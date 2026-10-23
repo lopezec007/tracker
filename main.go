@@ -25,7 +25,7 @@ import (
 // Version is the semantic version of this release and VersionDate the day it
 // was cut. build is the git description, set via -ldflags "-X main.build=...".
 const (
-	Version     = "0.1.0"
+	Version     = "0.0.1"
 	VersionDate = "2026-10-22"
 )
 
