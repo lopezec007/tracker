@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The real theme is Compose's (ui/theme); this only styles the window
+         before the first frame. -->
+    <style name="Theme.Tracker" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/system_neutral1_10</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+    </style>
+</resources>

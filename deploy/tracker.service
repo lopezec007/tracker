@@ -1,0 +1,67 @@
+# systemd unit for the tracker location tracker.
+# Installed by deploy/install.sh to /etc/systemd/system/tracker.service.
+#
+# Configuration lives in /etc/tracker/tracker.env (see tracker.env.example);
+# the Environment= lines below are the defaults when that file is absent or
+# does not set a variable.
+
+[Unit]
+Description=Tracker location tracker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tracker
+Group=tracker
+
+# Defaults; values in the EnvironmentFile override these.
+Environment=TRACKER_ADDR=0.0.0.0:8080
+Environment=TRACKER_DB=/var/lib/tracker/tracker.db
+EnvironmentFile=-/etc/tracker/tracker.env
+
+ExecStart=/usr/local/bin/tracker
+
+# /var/lib/tracker is created and chowned to tracker:tracker by systemd and
+# stays writable despite ProtectSystem=strict. The SQLite file plus its -wal
+# and -shm companions live there.
+StateDirectory=tracker
+StateDirectoryMode=0750
+WorkingDirectory=/var/lib/tracker
+UMask=0077
+
+Restart=on-failure
+RestartSec=2s
+
+# Hardening. The service needs nothing beyond: listen on a TCP port, read its
+# own binary, and read/write the state directory.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+# To listen on a privileged port (e.g. TRACKER_ADDR=0.0.0.0:80) replace the
+# line above with:
+#   CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+#   AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

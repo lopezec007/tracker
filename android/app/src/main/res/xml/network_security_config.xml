@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The tracker server speaks plain HTTP on the LAN / through WireGuard, and
+     its address is entered at runtime, so cleartext has to be permitted in
+     the base config (a domain-config needs the host at build time). The app
+     itself only ever connects to that one host; see README "Network policy". -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

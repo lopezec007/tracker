@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Tracker</string>
+    <string name="notification_channel_tracking">Tracking</string>
+    <string name="notification_channel_tracking_desc">The persistent notification of the location service</string>
+</resources>

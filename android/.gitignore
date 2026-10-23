@@ -1,0 +1,12 @@
+# Android build output and machine-local files (the repository root
+# .gitignore may repeat these; this one keeps android/ self-contained).
+.gradle/
+build/
+app/build/
+local.properties
+keystore.properties
+*.jks
+.kotlin/
+.idea/
+*.apk
+*.aab

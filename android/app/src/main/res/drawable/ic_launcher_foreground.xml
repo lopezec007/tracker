@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A map pin, the tracker's mark. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,26 C43.5,26 35,34.5 35,45 c0,14.25 19,35 19,35 s19,-20.75 19,-35 C73,34.5 64.5,26 54,26 z M54,52 c-3.87,0 -7,-3.13 -7,-7 s3.13,-7 7,-7 s7,3.13 7,7 S57.87,52 54,52 z" />
+</vector>
