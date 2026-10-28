@@ -65,6 +65,17 @@
             </intent-filter>
         </receiver>
 
+        <!-- Serves the rendered point icons to OsmAnd (osmand/PointIcons.kt). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- WorkManager is initialised on demand by TrackerApp (Configuration.Provider). -->
         <provider
             android:name="androidx.startup.InitializationProvider"

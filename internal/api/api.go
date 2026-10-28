@@ -34,9 +34,17 @@ type Server struct {
 }
 
 // New makes a server over the store. The version strings are what
-// GET /api/version reports.
+// GET /api/version reports, together with "app": "tracker" and the store's
+// server_id, which let a client make sure it is talking to the tracker it
+// was set up with and not to another machine at the same address.
 func New(st *store.Store, version, date, build string) *Server {
-	return &Server{st: st, version: map[string]string{"version": version, "date": date, "build": build}}
+	id, err := st.ServerID()
+	if err != nil {
+		log.Printf("server_id: %v", err)
+	}
+	return &Server{st: st, version: map[string]string{
+		"app": "tracker", "server_id": id, "version": version, "date": date, "build": build,
+	}}
 }
 
 // Handler returns the API router mounted under /api/.
@@ -125,16 +133,21 @@ func (s *Server) getEntity(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, e)
 }
 
+// putEntity creates or updates an entity. Fields absent from the body are
+// left unchanged, so a client that only knows the name does not wipe an icon
+// another client set; an empty icon or color clears it.
 func (s *Server) putEntity(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name   string `json:"name"`
-		Source string `json:"source"`
+		Name   *string `json:"name"`
+		Source *string `json:"source"`
+		Icon   *string `json:"icon"`
+		Color  *string `json:"color"`
 	}
 	if err := decode(w, r, &in); err != nil {
 		writeErr(w, err)
 		return
 	}
-	e, err := s.st.UpsertEntity(r.PathValue("id"), in.Name, in.Source)
+	e, err := s.st.PutEntity(r.PathValue("id"), store.EntityPatch{Name: in.Name, Source: in.Source, Icon: in.Icon, Color: in.Color})
 	if err != nil {
 		writeErr(w, err)
 		return

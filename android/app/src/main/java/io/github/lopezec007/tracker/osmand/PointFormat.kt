@@ -1,6 +1,7 @@
 // From the server's entities to what OsmAnd shows: one point per entity with
-// the name as its label and the fix's details (time, age, accuracy, altitude,
-// speed, heading, battery) in the context menu. Pure Kotlin, tested on the JVM.
+// the name as its label, the fix's details (time, age, accuracy, altitude,
+// speed, heading, battery) in the context menu, the entity's own colour and
+// icon when it has them (EntityAppearance). Pure Kotlin, tested on the JVM.
 package io.github.lopezec007.tracker.osmand
 
 import io.github.lopezec007.tracker.data.api.EntityDto
@@ -19,6 +20,8 @@ data class TrackerPoint(
     val color: Int,
     val details: List<String>,
     val params: Map<String, String>,
+    /** The entity's OsmAnd icon name ("" = default); the bridge renders it into the marker image. */
+    val icon: String = "",
 )
 
 object PointFormat {
@@ -34,6 +37,7 @@ object PointFormat {
     const val PARAM_SPEED = "point_speed_param"
     const val PARAM_BEARING = "point_bearing_param"
     const val PARAM_STALE = "point_stale_loc_param"
+    const val PARAM_ICON_NAME = "point_type_icon_name_param"
 
     /** The epoch millis the age of an entity's latest fix is measured from: the server's receive time. */
     fun fixTime(e: EntityDto): Long? {
@@ -75,8 +79,11 @@ object PointFormat {
         f.heading_deg?.let { params["heading_deg"] = fmt(it, 1); params[PARAM_BEARING] = fmt(it, 1) }
         f.battery_pct?.let { params["battery_pct"] = it.toString() }
         params[PARAM_STALE] = stale.toString()
+        if (e.icon.isNotEmpty()) params[PARAM_ICON_NAME] = e.icon
 
-        val color = when {
+        // The entity's own colour wins (stale still shows through the stale
+        // param and the age); without one: blue me, green others, grey stale.
+        val color = EntityAppearance.parseColor(e.color) ?: when {
             stale -> COLOR_STALE
             e.id == myId -> COLOR_ME
             else -> COLOR_OTHER
@@ -90,6 +97,7 @@ object PointFormat {
             color = color,
             details = details,
             params = params,
+            icon = e.icon,
         )
     }
 

@@ -12,8 +12,8 @@ class PointFormatTest {
     private val now = 1_792_692_000_000L // 2026-10-22T18:00:00Z
     private val zone = ZoneId.of("UTC")
 
-    private fun entity(id: String, ageMs: Long?, name: String = id) = EntityDto(
-        id = id, name = name, source = "phone",
+    private fun entity(id: String, ageMs: Long?, name: String = id, icon: String = "", color: String = "") = EntityDto(
+        id = id, name = name, source = "phone", icon = icon, color = color,
         latest = ageMs?.let {
             FixDto(
                 id = 1, entity_id = id, received_at = io.github.lopezec007.tracker.util.Ages.formatRfc3339(now - it),
@@ -49,6 +49,28 @@ class PointFormatTest {
         assertEquals(PointFormat.COLOR_STALE, stale.color)
         assertEquals("true", stale.params[PointFormat.PARAM_STALE])
         assertTrue(stale.typeName.endsWith("2 h 00 min ago"))
+    }
+
+    @Test
+    fun iconGoesToOsmAndAsTheTypeIconParam() {
+        val p = PointFormat.point(entity("x", 60_000L, icon = "ic_action_car_dark"), myId = "me", nowMs = now, zone = zone)!!
+        assertEquals("ic_action_car_dark", p.params[PointFormat.PARAM_ICON_NAME])
+        assertEquals("point_type_icon_name_param", PointFormat.PARAM_ICON_NAME)
+        val none = PointFormat.point(entity("y", 60_000L), myId = "me", nowMs = now, zone = zone)!!
+        assertTrue(PointFormat.PARAM_ICON_NAME !in none.params)
+    }
+
+    @Test
+    fun ownColourWinsEvenWhenStaleButTheStaleParamStays() {
+        val fresh = PointFormat.point(entity("me", 60_000L, color = "#E53935"), myId = "me", nowMs = now, zone = zone)!!
+        assertEquals(0xFFE53935.toInt(), fresh.color)
+        val stale = PointFormat.point(entity("x", 2 * 3_600_000L, color = "#1e88e5"), myId = "me", nowMs = now, zone = zone)!!
+        assertEquals(0xFF1E88E5.toInt(), stale.color)
+        assertEquals("true", stale.params[PointFormat.PARAM_STALE])
+        assertTrue(stale.typeName.endsWith("2 h 00 min ago"))
+        // Malformed or empty: today's rule.
+        assertEquals(PointFormat.COLOR_OTHER, PointFormat.point(entity("x", 60_000L, color = "red"), myId = "me", nowMs = now, zone = zone)!!.color)
+        assertEquals(PointFormat.COLOR_STALE, PointFormat.point(entity("x", 2 * 3_600_000L, color = ""), myId = "me", nowMs = now, zone = zone)!!.color)
     }
 
     @Test

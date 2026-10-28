@@ -84,7 +84,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         val graph = TrackerApp.graph(applicationContext)
         return when (graph.syncEngine.sync()) {
             is SyncResult.Done, is SyncResult.NotConfigured -> Result.success()
-            is SyncResult.Offline -> Result.retry()
+            is SyncResult.Offline, is SyncResult.WrongServer -> Result.retry()
             is SyncResult.Failed -> if (runAttemptCount < 5) Result.retry() else Result.failure()
         }
     }

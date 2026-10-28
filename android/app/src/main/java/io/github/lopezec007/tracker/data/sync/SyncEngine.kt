@@ -22,7 +22,11 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import java.io.IOException
 
-enum class SyncPhase { IDLE, SYNCING, OFFLINE, NOT_CONFIGURED }
+enum class SyncPhase {
+    IDLE, SYNCING, OFFLINE, NOT_CONFIGURED,
+    /** A tracker server answered, but not the pinned one: nothing is sent, the queue is kept (README "Server identity"). */
+    WRONG_SERVER,
+}
 
 data class SyncState(
     val phase: SyncPhase = SyncPhase.IDLE,
@@ -41,6 +45,8 @@ sealed class SyncResult {
     object NotConfigured : SyncResult()
     data class Offline(val reason: String) : SyncResult()
     data class Failed(val reason: String) : SyncResult()
+    /** A different server answered at the address: nothing was sent; the queue is kept. */
+    data class WrongServer(val reason: String) : SyncResult()
 }
 
 /** What the server must know about this phone before it takes fixes. */
@@ -52,6 +58,8 @@ class SyncEngine(
     private val apiProvider: () -> TrackerApi?,
     /** This phone's entity id and display name, or null before setup. */
     private val identityProvider: suspend () -> Identity?,
+    /** Probes the server and checks its identity before anything is sent. */
+    private val gate: ServerGate,
     private val now: () -> Long = System::currentTimeMillis,
     private val batchSize: Int = TrackerApi.MAX_BATCH,
     /** Queued fixes older than this are pruned instead of sent. */
@@ -91,8 +99,9 @@ class SyncEngine(
                     phase = SyncPhase.IDLE, pending = pending, lastSuccess = now(),
                     lastError = if (s.dropped > droppedBefore) s.lastError else null,
                 )
-                is SyncResult.Offline -> s.copy(phase = SyncPhase.OFFLINE, pending = pending)
+                is SyncResult.Offline -> s.copy(phase = SyncPhase.OFFLINE, pending = pending, lastError = result.reason)
                 is SyncResult.Failed -> s.copy(phase = SyncPhase.IDLE, pending = pending, lastError = result.reason)
+                is SyncResult.WrongServer -> s.copy(phase = SyncPhase.WRONG_SERVER, pending = pending, lastError = result.reason)
                 is SyncResult.NotConfigured -> s.copy(phase = SyncPhase.NOT_CONFIGURED, pending = pending)
             }
         }
@@ -101,7 +110,12 @@ class SyncEngine(
 
     private suspend fun runCycle(api: TrackerApi, identity: Identity): SyncResult {
         db.pendingFixes().deleteOlderThan(now() - maxAgeMs)
-        val version = api.probe()  // IOException when the server cannot be seen
+        // Probe and identity check first: an unreachable or foreign address gets nothing.
+        val version = when (val g = gate.check(api)) {
+            is GateResult.Ok -> g.version
+            is GateResult.Offline -> return SyncResult.Offline(g.reason)
+            is GateResult.WrongServer -> return SyncResult.WrongServer(g.reason)
+        }
         _state.update { it.copy(serverVersion = version.version) }
         // Cheap and idempotent: the server learns the current name, and the
         // entity exists before its fixes arrive.

@@ -37,10 +37,72 @@ class TrackerApiTest {
     }
 
     @Test
-    fun probeReadsTheVersion() = runBlocking {
-        server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody("""{"version":"0.1.0","date":"2026-10-22","build":"abc"}"""))
-        assertEquals("0.1.0", api.probe().version)
+    fun probeReadsTheVersionAndIdentity() = runBlocking {
+        server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody("""{"version":"0.1.0","date":"2026-10-22","build":"abc","app":"tracker","server_id":"5f1c"}"""))
+        val v = api.probe()
+        assertEquals("0.1.0", v.version)
+        assertEquals("tracker", v.app)
+        assertEquals("5f1c", v.server_id)
         assertEquals("/api/version", server.takeRequest().path)
+        // An old server: the fields are simply empty (the gate treats that as unavailable).
+        server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody("""{"version":"0.0.1","date":"2026-10-22","build":"abc"}"""))
+        val old = api.probe()
+        assertEquals("", old.app)
+        assertEquals("", old.server_id)
+    }
+
+    @Test
+    fun entitiesCarryIconAndColour() = runBlocking {
+        server.enqueue(
+            MockResponse().setHeader("Content-Type", "application/json").setBody(
+                """[{"id":"a1","name":"Evan","source":"phone","created_at":"c","updated_at":"u","icon":"ic_action_car_dark","color":"#E53935","latest":null},
+                    {"id":"b2","name":"Plane","source":"adsb","created_at":"c","updated_at":"u","icon":"","color":"","latest":null},
+                    {"id":"c3","name":"Old","source":"x","created_at":"c","updated_at":"u","latest":null}]""",
+            ),
+        )
+        val list = api.listEntities()
+        assertEquals("ic_action_car_dark", list[0].icon)
+        assertEquals("#E53935", list[0].color)
+        assertEquals("", list[1].icon)
+        assertEquals("", list[1].color)
+        assertEquals("", list[2].icon)  // absent on the wire: default
+        assertEquals("", list[2].color)
+    }
+
+    @Test
+    fun appearanceIsPutOnlyWhenMeant() = runBlocking {
+        val ok = MockResponse().setHeader("Content-Type", "application/json").setBody("""{"id":"a1","name":"Evan","source":"phone","created_at":"c","updated_at":"u","latest":null}""")
+        // Another entity: only the appearance; "" clears a field.
+        server.enqueue(ok)
+        api.putAppearance("b2", "ic_action_flag", "")
+        assertEquals("""{"icon":"ic_action_flag","color":""}""", server.takeRequest().body.readUtf8())
+        // My own entity: the name goes along.
+        server.enqueue(ok)
+        api.putAppearance("a1", "", "#1E88E5", name = "Evan")
+        val req = server.takeRequest()
+        assertEquals("PUT", req.method)
+        assertEquals("/api/entities/a1", req.path)
+        assertEquals("""{"name":"Evan","source":"phone","icon":"","color":"#1E88E5"}""", req.body.readUtf8())
+    }
+
+    @Test
+    fun historyIsFetchedWithRangeAndLimit() = runBlocking {
+        server.enqueue(
+            MockResponse().setHeader("Content-Type", "application/json").setBody(
+                """[{"id":1,"entity_id":"a1","received_at":"2026-10-22T17:00:00Z","device_time":"2026-10-22T16:59:58Z","lat":45.5,"lon":-73.6,"altitude_m":40.0},
+                    {"id":2,"entity_id":"a1","received_at":"2026-10-22T17:02:00Z","device_time":null,"lat":45.6,"lon":-73.7}]""",
+            ),
+        )
+        val fixes = api.listFixes("a1", "2026-10-22T16:00:00Z", "2026-10-22T18:00:00Z", 10_000)
+        assertEquals(listOf(1L, 2L), fixes.map { it.id })
+        val req = server.takeRequest()
+        assertEquals("GET", req.method)
+        assertEquals("/api/entities/a1/fixes?from=2026-10-22T16%3A00%3A00Z&to=2026-10-22T18%3A00%3A00Z&limit=10000", req.path)
+        try {
+            api.listFixes("a1", "a", "b", 10_001)
+            fail("expected IllegalArgumentException")
+        } catch (_: IllegalArgumentException) {
+        }
     }
 
     @Test

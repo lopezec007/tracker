@@ -46,18 +46,32 @@ All JSON; errors are `{"error": "message"}` with 400 (bad input), 404
 (unknown entity or path) or 405 (wrong method). Timestamps are RFC 3339 in
 UTC; clients may send any offset and any sub-second precision.
 
-    GET  /api/version                  {"version", "date", "build"}  liveness probe
-    PUT  /api/entities/{id}            {"name", "source"?}  create or rename; 200 with the entity
+    GET  /api/version                  {"app": "tracker", "server_id", "version", "date", "build"}
+    PUT  /api/entities/{id}            {"name"?, "source"?, "icon"?, "color"?}  create or update; 200 with the entity
     GET  /api/entities                 every entity with its latest fix, ordered by name then id
     GET  /api/entities/{id}            one entity with its latest fix, or 404
     POST /api/entities/{id}/fixes      [fix, ...] 1 to 500 fixes; 201 {"accepted": n, "latest": fix}
     GET  /api/entities/{id}/fixes      history, oldest first; ?from=&to=&limit=
 
-`PUT /api/entities/{id}`: `id` is 1 to 64 characters of `A-Za-z0-9._-`;
-`name` is trimmed and must be 1 to 64 characters; `source` is 1 to 32
-characters of `a-z0-9_-`, defaults to `phone` when creating, and cannot be
-changed afterwards (400). `updated_at` moves on a rename, not on fixes and not
-on a PUT that changes nothing.
+`GET /api/version`: `server_id` is a UUID made when the database is first
+created and never changed. The app records it when it is set up and refuses
+to send anything to, or read anything from, an address where a different id
+(or no tracker at all) answers, so a phone that roams onto another network
+where the same IP belongs to some other machine stays quiet and keeps its
+queue. Restoring the database from a backup keeps the id; starting with a
+fresh database makes a new one, and each phone must then "forget" the old
+one in its Settings.
+
+`PUT /api/entities/{id}`: `id` is 1 to 64 characters of `A-Za-z0-9._-`. Every
+body field is optional and an absent field is left unchanged, so a client
+that only knows the name does not wipe what another set. `name` is trimmed
+and must be 1 to 64 characters, and is required to create an entity.
+`source` is 1 to 32 characters of `a-z0-9_-`, defaults to `phone` when
+creating, and cannot be changed afterwards (400). `icon` is the name of an
+OsmAnd built-in icon (up to 64 characters of `a-z0-9_`) and `color` a
+`#rrggbb` string; an empty string clears either and `""` is the client's
+default. `updated_at` moves when name, icon or colour actually change, not
+on fixes and not on a PUT that changes nothing.
 
 `POST /api/entities/{id}/fixes`: the body is a JSON array of fixes. All of
 them are validated first and inserted in one transaction, so on a 400 nothing
@@ -77,23 +91,26 @@ object, `device_time` RFC 3339. Unknown fields are ignored.
 on `received_at`; `limit` defaults to 1000 and may be at most 10000. The
 result is ordered by `received_at` then id.
 
-Entity JSON: `id`, `name`, `source`, `created_at`, `updated_at`, `latest`
-(a fix, or null). Fix JSON: `id`, `entity_id`, `received_at`, `device_time`,
+Entity JSON: `id`, `name`, `source`, `icon`, `color`, `created_at`,
+`updated_at`, `latest` (a fix, or null). Fix JSON: `id`, `entity_id`, `received_at`, `device_time`,
 `lat`, `lon`, `accuracy_m`, `altitude_m`, `speed_mps`, `heading_deg`,
 `battery_pct`, `metadata`. Nullable fields are always present, as `null` when
 unset.
 
 ## Data model
 
-Two tables in one SQLite file (WAL mode):
+Three tables in one SQLite file (WAL mode):
 
-    entities  id TEXT PK, name, source, created_at, updated_at
+    entities  id TEXT PK, name, source, icon, color, created_at, updated_at
     fixes     id INTEGER PK AUTOINCREMENT, entity_id -> entities, received_at,
               device_time, lat, lon, accuracy_m, altitude_m, speed_mps,
               heading_deg, battery_pct, metadata (JSON text)
               index (entity_id, received_at, id)
+    meta      key TEXT PK, value   (server_id)
 
-The schema version is kept in `PRAGMA user_version`. Timestamps are stored as
+The schema version is kept in `PRAGMA user_version` (2: icon, color and meta
+were added; a version 1 database is upgraded in place after the usual
+backup). Timestamps are stored as
 RFC 3339 UTC with a fixed nine fractional digits so that they sort as plain
 strings; the API emits them in the usual trimmed form.
 

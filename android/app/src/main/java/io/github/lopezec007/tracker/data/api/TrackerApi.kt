@@ -49,6 +49,9 @@ class TrackerApi(val baseUrl: HttpUrl, client: OkHttpClient? = null) {
         /** The largest batch POST /fixes accepts. */
         const val MAX_BATCH = 500
 
+        /** The largest page GET /fixes returns. */
+        const val MAX_HISTORY_PAGE = 10_000
+
         /** What the server tags entities created by this app with. */
         const val SOURCE_PHONE = "phone"
 
@@ -108,13 +111,41 @@ class TrackerApi(val baseUrl: HttpUrl, client: OkHttpClient? = null) {
 
     suspend fun getEntity(id: String): EntityDto = call(Request.Builder().url(url("entities", id)).get().build())
 
-    /** Creates or renames the entity (idempotent). */
+    /**
+     * Creates or renames the entity (idempotent). Deliberately sends no
+     * "icon"/"color": a field that is absent leaves the server's value alone.
+     */
     suspend fun putEntity(id: String, name: String, source: String = SOURCE_PHONE): EntityDto {
         val body = buildJsonObject { put("name", name); put("source", source) }.toString()
         return call(Request.Builder().url(url("entities", id)).put(jsonBody(body)).build())
     }
 
+    /**
+     * Sets the entity's icon and colour ("" clears either). [name] is sent
+     * too when given (this phone's own entity); for another entity only the
+     * appearance goes, so its name is left as it is.
+     */
+    suspend fun putAppearance(id: String, icon: String, color: String, name: String? = null, source: String = SOURCE_PHONE): EntityDto {
+        val body = buildJsonObject {
+            if (name != null) { put("name", name); put("source", source) }
+            put("icon", icon)
+            put("color", color)
+        }.toString()
+        return call(Request.Builder().url(url("entities", id)).put(jsonBody(body)).build())
+    }
+
     // ---- fixes
+
+    /** GET /api/entities/{id}/fixes?from&to&limit: fixes in [from, to], oldest first, at most [limit] (1..[MAX_HISTORY_PAGE]). */
+    suspend fun listFixes(entityId: String, from: String, to: String, limit: Int): List<FixDto> {
+        require(limit in 1..MAX_HISTORY_PAGE) { "limit is 1..$MAX_HISTORY_PAGE" }
+        val u = url("entities", entityId, "fixes").newBuilder()
+            .addQueryParameter("from", from)
+            .addQueryParameter("to", to)
+            .addQueryParameter("limit", limit.toString())
+            .build()
+        return call(Request.Builder().url(u).get().build())
+    }
 
     /** POST 1..[MAX_BATCH] fixes in order; the server takes all of them or none (400). */
     suspend fun postFixes(entityId: String, fixes: List<FixInput>): PostFixesDto {

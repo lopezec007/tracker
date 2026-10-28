@@ -40,7 +40,12 @@ class TrackingNotifier(private val context: Context) {
             append("Last fix: ")
             append(status.lastFixAt?.let { Ages.formatAgo(nowMs - it) } ?: "none yet")
             if (pending > 0) append(" · $pending queued")
-            if (syncPhase == SyncPhase.OFFLINE) append(" · offline")
+            when (syncPhase) {
+                SyncPhase.OFFLINE -> append(" · offline")
+                // A foreign machine answers at the server's address (README "Server identity").
+                SyncPhase.WRONG_SERVER -> append(" · a different server answered; nothing sent, fixes kept")
+                else -> {}
+            }
         }
         val open = PendingIntent.getActivity(
             context, 0,

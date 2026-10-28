@@ -1,12 +1,14 @@
 // The status screen: permissions still missing, the service (tracking /
-// paused, last fix, queue, sync), OsmAnd, and every entity with the age of
-// its last fix.
+// paused, last fix, queue, sync), a warning when a different server answers
+// at the server's address, OsmAnd, and every entity with the age of its
+// last fix and its actions (show on map, go to, history, edit icon).
 package io.github.lopezec007.tracker.ui.main
 
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,14 +16,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -29,6 +35,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,6 +47,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -52,11 +61,16 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lopezec007.tracker.data.api.EntityDto
+import io.github.lopezec007.tracker.data.sync.HistoryRange
+import io.github.lopezec007.tracker.data.sync.ServerIdentity
 import io.github.lopezec007.tracker.data.sync.SyncPhase
 import io.github.lopezec007.tracker.location.Permissions
 import io.github.lopezec007.tracker.osmand.OsmAndStatus
 import io.github.lopezec007.tracker.osmand.PointFormat
 import io.github.lopezec007.tracker.ui.TrackerViewModel
+import io.github.lopezec007.tracker.ui.common.IconGlyphs
+import io.github.lopezec007.tracker.ui.common.IconPickerDialog
+import io.github.lopezec007.tracker.ui.common.entityTint
 import io.github.lopezec007.tracker.ui.nav.Nav
 import io.github.lopezec007.tracker.ui.nav.Screen
 import io.github.lopezec007.tracker.ui.theme.LocalPalette
@@ -73,7 +87,22 @@ fun MainScreen(vm: TrackerViewModel, nav: Nav) {
     val poll by vm.poll.collectAsStateWithLifecycle()
     val osmand by vm.osmand.collectAsStateWithLifecycle()
     val pending by vm.pendingCount.collectAsStateWithLifecycle()
+    val message by vm.message.collectAsStateWithLifecycle()
+    val busy by vm.busy.collectAsStateWithLifecycle()
+    val historyShown by vm.historyShown.collectAsStateWithLifecycle()
     val context = LocalContext.current
+
+    // The outcome of an action (go to, history, icon) as a snackbar.
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(message) {
+        val m = message ?: return@LaunchedEffect
+        snackbar.showSnackbar(m)
+        vm.clearMessage()
+    }
+
+    // The entity whose icon or history sheet is open.
+    var iconFor by remember { mutableStateOf<EntityDto?>(null) }
+    var historyFor by remember { mutableStateOf<EntityDto?>(null) }
 
     // "x min ago" texts are recomputed every half minute.
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -111,6 +140,7 @@ fun MainScreen(vm: TrackerViewModel, nav: Nav) {
     val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permissionsVersion++ }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text("Tracker") },
@@ -160,6 +190,10 @@ fun MainScreen(vm: TrackerViewModel, nav: Nav) {
                 onSyncNow = { vm.requestSync() },
             )
 
+            if (sync.phase == SyncPhase.WRONG_SERVER || poll.wrongServer) {
+                WrongServerCard(sync.lastError ?: poll.lastError ?: "a different server answered", pinned = p.pinnedServerId)
+            }
+
             OsmAndCard(
                 status = osmand.status,
                 packageName = osmand.packageName,
@@ -179,10 +213,40 @@ fun MainScreen(vm: TrackerViewModel, nav: Nav) {
                 error = poll.lastError,
                 polling = poll.polling,
                 now = now,
+                historyShown = historyShown,
                 onRefresh = { vm.refreshEntities() },
+                onShowOnMap = { vm.showOnMap(it, context) },
+                onGoTo = { vm.goTo(it, context) },
+                onHistory = { historyFor = it },
+                onEditIcon = { iconFor = it },
             )
             Spacer(Modifier.height(16.dp))
         }
+    }
+
+    iconFor?.let { e ->
+        IconPickerDialog(
+            title = "Icon of ${e.name.ifBlank { e.id }}",
+            initialIcon = e.icon,
+            initialColor = e.color,
+            onDismiss = { iconFor = null },
+            onConfirm = { icon, color ->
+                iconFor = null
+                vm.setAppearance(e.id, icon, color)
+            },
+        )
+    }
+    historyFor?.let { e ->
+        HistorySheet(
+            entity = e,
+            shown = e.id in historyShown,
+            busy = busy,
+            osmandInstalled = osmandInstalled,
+            onShow = { range -> vm.showHistory(e, range, context); historyFor = null },
+            onHide = { vm.hideHistory(e); historyFor = null },
+            onRemove = { vm.removeHistory(e); historyFor = null },
+            onDismiss = { historyFor = null },
+        )
     }
 }
 
@@ -271,9 +335,14 @@ private fun StatusCard(
                     SyncPhase.IDLE -> "idle"
                     SyncPhase.SYNCING -> "sending…"
                     SyncPhase.OFFLINE -> "offline — server not reachable"
+                    SyncPhase.WRONG_SERVER -> "stopped — a different server answered"
                     SyncPhase.NOT_CONFIGURED -> "not configured"
                 },
-                if (syncPhase == SyncPhase.OFFLINE) palette.warn else Color.Unspecified,
+                when (syncPhase) {
+                    SyncPhase.OFFLINE -> palette.warn
+                    SyncPhase.WRONG_SERVER -> palette.danger
+                    else -> Color.Unspecified
+                },
             )
             InfoRow("Last sync", lastSync?.let { Ages.formatAgo(now - it) } ?: "never")
             InfoRow("Last sent", lastSent?.let { "fix of " + Ages.formatTime(it, now) } ?: "nothing yet this session")
@@ -323,9 +392,27 @@ private fun OsmAndCard(
 }
 
 @Composable
+private fun WrongServerCard(reason: String, pinned: String) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Different server", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onErrorContainer, fontWeight = FontWeight.Medium)
+            Text(reason.replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onErrorContainer)
+            Text(
+                "Nothing is sent to it and the entities are not asked for; the queued fixes wait for the server with identity " +
+                    "${ServerIdentity.shortId(pinned)}…. Back on the right network this clears itself. If you rebuilt the server's " +
+                    "database on purpose, use Settings → Forget server identity.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+        }
+    }
+}
+
+@Composable
 private fun EntitiesSection(
     entities: List<EntityDto>, myId: String, lastPoll: Long?, error: String?, polling: Boolean,
-    now: Long, onRefresh: () -> Unit,
+    now: Long, historyShown: Set<String>,
+    onRefresh: () -> Unit,
+    onShowOnMap: (EntityDto) -> Unit, onGoTo: (EntityDto) -> Unit, onHistory: (EntityDto) -> Unit, onEditIcon: (EntityDto) -> Unit,
 ) {
     val palette = LocalPalette.current
     Card {
@@ -346,19 +433,35 @@ private fun EntitiesSection(
             }
             for (e in entities) {
                 HorizontalDivider(Modifier.padding(vertical = 6.dp), color = palette.rowBorder)
-                EntityRow(e, e.id == myId, now)
+                EntityRow(
+                    e, e.id == myId, now, historyShown = e.id in historyShown,
+                    onShowOnMap = { onShowOnMap(e) }, onGoTo = { onGoTo(e) }, onHistory = { onHistory(e) }, onEditIcon = { onEditIcon(e) },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun EntityRow(e: EntityDto, me: Boolean, now: Long) {
+private fun EntityRow(
+    e: EntityDto, me: Boolean, now: Long, historyShown: Boolean,
+    onShowOnMap: () -> Unit, onGoTo: () -> Unit, onHistory: () -> Unit, onEditIcon: () -> Unit,
+) {
     val palette = LocalPalette.current
     val at = PointFormat.fixTime(e)
     val age = at?.let { now - it }
     val stale = age == null || age > PointFormat.STALE_AFTER_MS
+    val hasFix = e.latest != null
+    var menuOpen by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        // The entity's icon in its colour, as OsmAnd's context menu shows it.
+        Icon(
+            IconGlyphs.glyph(e.icon),
+            contentDescription = null,
+            tint = entityTint(e.color, if (me) MaterialTheme.colorScheme.primary else if (stale) palette.subtle else palette.ok),
+            modifier = Modifier.size(28.dp),
+        )
+        Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 e.name.ifBlank { e.id } + if (me) "  (you)" else "",
@@ -371,6 +474,7 @@ private fun EntityRow(e: EntityDto, me: Boolean, now: Long) {
                 f.speed_mps?.let { add("${(it * 3.6).toInt()} km/h") }
                 f.battery_pct?.let { add("$it%") }
                 add(e.source.ifBlank { "unknown" })
+                if (historyShown) add("history shown")
             }.joinToString(" · ")
             Text(detail, style = MaterialTheme.typography.bodySmall, color = palette.subtle)
         }
@@ -379,5 +483,16 @@ private fun EntityRow(e: EntityDto, me: Boolean, now: Long) {
             style = MaterialTheme.typography.bodyMedium,
             color = if (stale) palette.warn else palette.ok,
         )
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(Icons.Filled.MoreVert, contentDescription = "Actions for ${e.name.ifBlank { e.id }}")
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(text = { Text("Show on map") }, enabled = hasFix, onClick = { menuOpen = false; onShowOnMap() })
+                DropdownMenuItem(text = { Text("Go to") }, enabled = hasFix, onClick = { menuOpen = false; onGoTo() })
+                DropdownMenuItem(text = { Text("History…") }, onClick = { menuOpen = false; onHistory() })
+                DropdownMenuItem(text = { Text("Edit icon…") }, onClick = { menuOpen = false; onEditIcon() })
+            }
+        }
     }
 }

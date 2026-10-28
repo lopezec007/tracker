@@ -1,6 +1,7 @@
-// The phone's own settings, in DataStore: the server, the identity of this
-// phone (a display name and the entity id generated once), the collection
-// intervals and the pause switch.
+// The phone's own settings, in DataStore: the server and its pinned
+// identity, the identity of this phone (a display name and the entity id
+// generated once), the collection intervals, the pause switch and the
+// OsmAnd routing profile.
 package io.github.lopezec007.tracker.prefs
 
 import android.content.Context
@@ -21,6 +22,8 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 
 data class AppPrefs(
     val serverUrl: String = "",
+    /** The server_id of the tracker server at [serverUrl], pinned on the first successful probe; "" until then. */
+    val pinnedServerId: String = "",
     val name: String = "",
     /** Generated once by [Prefs.ensureEntityId]; "" only before that first run. Never changes. */
     val entityId: String = "",
@@ -32,6 +35,8 @@ data class AppPrefs(
     /** Use the GPS provider even when the platform offers a fused one. */
     val gpsOnly: Boolean = false,
     val setupDone: Boolean = false,
+    /** OsmAnd profile used by "Go to": one of [ROUTING_PROFILES]. */
+    val routingProfile: String = DEFAULT_ROUTING_PROFILE,
     /** Epoch millis of the last fix recorded and of the last completed sync, kept across restarts for the status screen. */
     val lastFixAt: Long? = null,
     val lastSyncAt: Long? = null,
@@ -52,6 +57,10 @@ data class AppPrefs(
         /** The server's rule for a display name: trimmed, 1..64 characters. */
         const val NAME_MAX = 64
 
+        /** OsmAnd's own profile names, as navigate() takes them. */
+        val ROUTING_PROFILES = listOf("car", "bicycle", "pedestrian")
+        const val DEFAULT_ROUTING_PROFILE = "car"
+
         fun cleanName(raw: String): String = raw.trim().take(NAME_MAX)
     }
 }
@@ -59,6 +68,8 @@ data class AppPrefs(
 class Prefs(private val context: Context) {
     private object K {
         val serverUrl = stringPreferencesKey("server_url")
+        val pinnedServerId = stringPreferencesKey("pinned_server_id")
+        val routingProfile = stringPreferencesKey("routing_profile")
         val name = stringPreferencesKey("name")
         val entityId = stringPreferencesKey("entity_id")
         val updateIntervalSec = intPreferencesKey("update_interval_sec")
@@ -78,6 +89,8 @@ class Prefs(private val context: Context) {
 
     private fun fromPrefs(p: Preferences) = AppPrefs(
         serverUrl = p[K.serverUrl] ?: "",
+        pinnedServerId = p[K.pinnedServerId] ?: "",
+        routingProfile = p[K.routingProfile]?.takeIf { it in AppPrefs.ROUTING_PROFILES } ?: AppPrefs.DEFAULT_ROUTING_PROFILE,
         name = p[K.name] ?: "",
         entityId = p[K.entityId] ?: "",
         updateIntervalSec = p[K.updateIntervalSec] ?: AppPrefs.DEFAULT_UPDATE_INTERVAL_SEC,
@@ -103,9 +116,22 @@ class Prefs(private val context: Context) {
         return current().entityId
     }
 
-    suspend fun setServer(url: String) = context.dataStore.edit {
+    /**
+     * Points the app at [url] and pins [serverId] as its identity ("" when
+     * the address was accepted unreached: the first successful probe pins).
+     * Any earlier pin is dropped with the old address.
+     */
+    suspend fun setServer(url: String, serverId: String = "") = context.dataStore.edit {
         it[K.serverUrl] = url
+        it[K.pinnedServerId] = serverId
         it[K.setupDone] = url.isNotBlank() && !it[K.name].isNullOrBlank()
+    }
+
+    /** Pins the server id seen by the first successful probe (ServerGate). */
+    suspend fun setPinnedServerId(id: String) = context.dataStore.edit { it[K.pinnedServerId] = id }
+
+    suspend fun setRoutingProfile(profile: String) = context.dataStore.edit {
+        it[K.routingProfile] = if (profile in AppPrefs.ROUTING_PROFILES) profile else AppPrefs.DEFAULT_ROUTING_PROFILE
     }
 
     suspend fun setName(name: String) = context.dataStore.edit {

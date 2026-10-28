@@ -65,6 +65,54 @@ func TestVersion(t *testing.T) {
 	if v["version"] != "0.1.0" || v["date"] != "2026-10-22" || v["build"] != "test" {
 		t.Fatalf("version: %v", v)
 	}
+	if v["app"] != "tracker" || len(v["server_id"]) != 36 {
+		t.Fatalf("version should identify the server: %v", v)
+	}
+	// The id is stable across requests (and, by construction, restarts).
+	var again map[string]string
+	call(t, srv, "GET", "/api/version", nil, &again)
+	if again["server_id"] != v["server_id"] {
+		t.Fatalf("server_id changed: %s -> %s", v["server_id"], again["server_id"])
+	}
+}
+
+func TestEntityIconAndColor(t *testing.T) {
+	srv := setup(t)
+	var e map[string]any
+	call(t, srv, "PUT", "/api/entities/p", map[string]any{"name": "P"}, &e)
+	if e["icon"] != "" || e["color"] != "" {
+		t.Fatalf("defaults: %v", e)
+	}
+	// A deliberate icon change, without a name.
+	if c, b := call(t, srv, "PUT", "/api/entities/p", map[string]any{"icon": "mx_shop_car", "color": "#FF8800"}, &e); c != 200 {
+		t.Fatalf("set icon: %d %s", c, b)
+	}
+	if e["icon"] != "mx_shop_car" || e["color"] != "#ff8800" || e["name"] != "P" {
+		t.Fatalf("icon set: %v", e)
+	}
+	// The routine name-only PUT must not touch them.
+	call(t, srv, "PUT", "/api/entities/p", map[string]any{"name": "P2"}, &e)
+	if e["icon"] != "mx_shop_car" || e["color"] != "#ff8800" || e["name"] != "P2" {
+		t.Fatalf("name-only PUT changed icon/color: %v", e)
+	}
+	// An empty string clears; a no-op body is a 200 no-op.
+	call(t, srv, "PUT", "/api/entities/p", map[string]any{"icon": "", "color": ""}, &e)
+	if e["icon"] != "" || e["color"] != "" {
+		t.Fatalf("clear: %v", e)
+	}
+	if c, _ := call(t, srv, "PUT", "/api/entities/p", map[string]any{}, &e); c != 200 {
+		t.Fatalf("empty patch on existing entity: %d", c)
+	}
+	// Creation may carry them.
+	call(t, srv, "PUT", "/api/entities/q", map[string]any{"name": "Q", "icon": "ic_action_bicycle_dark", "color": "#00aa00"}, &e)
+	if e["icon"] != "ic_action_bicycle_dark" || e["color"] != "#00aa00" {
+		t.Fatalf("create with icon: %v", e)
+	}
+	var list []map[string]any
+	call(t, srv, "GET", "/api/entities", nil, &list)
+	if len(list) != 2 || list[1]["icon"] != "ic_action_bicycle_dark" {
+		t.Fatalf("list carries icons: %v", list)
+	}
 }
 
 func TestEntityAndFixLifecycle(t *testing.T) {
@@ -162,7 +210,9 @@ func TestErrors(t *testing.T) {
 		{"post to unknown entity", "POST", "/api/entities/ghost/fixes", `[{"lat":1,"lon":1}]`, 404},
 		{"unknown path", "GET", "/api/nope", nil, 404},
 		{"bad id", "PUT", "/api/entities/a%20b", map[string]any{"name": "x"}, 400},
-		{"missing name", "PUT", "/api/entities/p", map[string]any{}, 400},
+		{"missing name on new entity", "PUT", "/api/entities/new", map[string]any{}, 400},
+		{"bad icon", "PUT", "/api/entities/p", map[string]any{"icon": "Bad Icon"}, 400},
+		{"bad color", "PUT", "/api/entities/p", map[string]any{"color": "red"}, 400},
 		{"blank name", "PUT", "/api/entities/p", map[string]any{"name": "  "}, 400},
 		{"bad source", "PUT", "/api/entities/p", map[string]any{"name": "x", "source": "Phone"}, 400},
 		{"source change", "PUT", "/api/entities/p", map[string]any{"name": "x", "source": "aprs"}, 400},

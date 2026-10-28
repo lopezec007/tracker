@@ -10,6 +10,10 @@ data class VersionDto(
     val version: String = "",
     val date: String = "",
     val build: String = "",
+    /** "tracker" on a tracker server (0.1.0+); anything else answered at that address. */
+    val app: String = "",
+    /** Stable for the life of that server's database; what the app pins (README "Server identity"). */
+    val server_id: String = "",
 )
 
 /** One fix as the server stores it; everything but the coordinates may be null. */
@@ -51,6 +55,9 @@ data class EntityDto(
     val source: String = "",
     val created_at: String = "",
     val updated_at: String = "",
+    /** An OsmAnd drawable name ("" = default) and "#rrggbb" ("" = default); see osmand/EntityAppearance. */
+    val icon: String = "",
+    val color: String = "",
     val latest: FixDto? = null,
 )
 

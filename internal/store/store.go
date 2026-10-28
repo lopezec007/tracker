@@ -13,6 +13,7 @@ package store
 
 import (
 	"bytes"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -40,6 +41,8 @@ const (
 var (
 	validID     = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 	validSource = regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
+	validIcon   = regexp.MustCompile(`^[a-z0-9_]{0,64}$`)
+	validColor  = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 )
 
 // ValidationError is returned for client-caused failures (HTTP 400).
@@ -53,15 +56,27 @@ func verr(format string, a ...any) error { return &ValidationError{Msg: fmt.Spri
 var ErrNotFound = errors.New("not found")
 
 // Entity is anything with a position: a phone, or later an APRS station or
-// an aircraft. Latest is its most recent fix by received_at (then id), or nil
-// if it has none.
+// an aircraft. Icon is the name of an OsmAnd built-in icon and Color a
+// "#rrggbb" string; both are "" for the client's default. Latest is its most
+// recent fix by received_at (then id), or nil if it has none.
 type Entity struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Source    string `json:"source"`
+	Icon      string `json:"icon"`
+	Color     string `json:"color"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 	Latest    *Fix   `json:"latest"`
+}
+
+// EntityPatch is the input for PutEntity: nil fields are left as they are
+// (Name is required when the entity does not exist yet).
+type EntityPatch struct {
+	Name   *string
+	Source *string
+	Icon   *string
+	Color  *string
 }
 
 // Fix is one position report as exposed by the API. Nullable fields are
@@ -105,7 +120,10 @@ type Store struct {
 
 // schemaVersion is stored in PRAGMA user_version. Bump it whenever migrate()
 // gains a step; an existing database below it is backed up before migrating.
-const schemaVersion = 1
+//
+//	1  entities, fixes
+//	2  entities.icon, entities.color; meta (server_id)
+const schemaVersion = 2
 
 // Open opens (creating if necessary) the SQLite database at path and applies
 // the schema. An existing database whose schema is behind is first copied to
@@ -139,7 +157,7 @@ func Open(path string) (*Store, error) {
 		}
 		s.LastBackup = backup
 	}
-	if err := s.migrate(); err != nil {
+	if err := s.migrate(version); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -159,8 +177,18 @@ CREATE TABLE IF NOT EXISTS entities (
 	id         TEXT PRIMARY KEY,
 	name       TEXT NOT NULL,
 	source     TEXT NOT NULL,
+	icon       TEXT NOT NULL DEFAULT '',
+	color      TEXT NOT NULL DEFAULT '',
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL
+);
+
+-- Key/value facts about this installation; server_id is a UUID made once so
+-- that a client can tell this server from another machine at the same
+-- address.
+CREATE TABLE IF NOT EXISTS meta (
+	key   TEXT PRIMARY KEY,
+	value TEXT NOT NULL
 );
 
 -- The fix schema is shared by every source; what a source cannot provide is
@@ -182,9 +210,48 @@ CREATE TABLE IF NOT EXISTS fixes (
 CREATE INDEX IF NOT EXISTS fixes_entity_time ON fixes(entity_id, received_at, id);
 `
 
-func (s *Store) migrate() error {
-	_, err := s.db.Exec(schema)
+// migrate brings a database at schema version from up to schemaVersion. The
+// schema constant creates the current tables for a fresh database; older
+// databases get the per-version ALTERs first.
+func (s *Store) migrate(from int) error {
+	if from == 1 {
+		for _, stmt := range []string{
+			`ALTER TABLE entities ADD COLUMN icon TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE entities ADD COLUMN color TEXT NOT NULL DEFAULT ''`,
+		} {
+			if _, err := s.db.Exec(stmt); err != nil {
+				return fmt.Errorf("migrate 1 -> 2: %w", err)
+			}
+		}
+	}
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	id, err := newUUID()
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`INSERT OR IGNORE INTO meta (key, value) VALUES ('server_id', ?)`, id)
 	return err
+}
+
+// ServerID is the UUID that identifies this database (and so this server)
+// to clients; it is made on first start and never changes.
+func (s *Store) ServerID() (string, error) {
+	var id string
+	err := s.db.QueryRow(`SELECT value FROM meta WHERE key = 'server_id'`).Scan(&id)
+	return id, err
+}
+
+// newUUID returns a random (version 4) UUID.
+func newUUID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
 // ---------------------------------------------------------------- timestamps
@@ -216,46 +283,93 @@ func outTS(s string) string {
 
 // ---------------------------------------------------------------- entities
 
-// UpsertEntity creates the entity, or renames it if it exists. An empty
-// source means "phone" on creation and "leave as is" on an existing entity;
-// a source that differs from an existing entity's is rejected. updated_at
-// changes only when the name actually changes.
+// UpsertEntity creates the entity, or renames it if it exists, leaving icon
+// and colour alone. See PutEntity for the rules.
 func (s *Store) UpsertEntity(id, name, source string) (*Entity, error) {
+	p := EntityPatch{Name: &name}
+	if source != "" {
+		p.Source = &source
+	}
+	return s.PutEntity(id, p)
+}
+
+// PutEntity creates or updates the entity. A nil field of the patch is left
+// as it is; an empty Icon or Color clears it. Name is required to create an
+// entity. Source defaults to "phone" on creation and cannot change
+// afterwards (an empty or nil Source means "leave as is"). updated_at moves
+// only when something actually changes.
+func (s *Store) PutEntity(id string, p EntityPatch) (*Entity, error) {
 	if !validID.MatchString(id) {
 		return nil, verr("id must be 1 to 64 characters of A-Z, a-z, 0-9, '.', '_' or '-'")
 	}
-	name = strings.TrimSpace(name)
-	if n := utf8.RuneCountInString(name); n == 0 || n > MaxName {
-		return nil, verr("name is required and must be at most %d characters", MaxName)
+	if p.Name != nil {
+		n := strings.TrimSpace(*p.Name)
+		if c := utf8.RuneCountInString(n); c == 0 || c > MaxName {
+			return nil, verr("name is required and must be at most %d characters", MaxName)
+		}
+		p.Name = &n
 	}
-	if source != "" && !validSource.MatchString(source) {
+	if p.Source != nil && *p.Source != "" && !validSource.MatchString(*p.Source) {
 		return nil, verr("source must be 1 to 32 characters of a-z, 0-9, '_' or '-'")
+	}
+	if p.Icon != nil && !validIcon.MatchString(*p.Icon) {
+		return nil, verr("icon must be at most 64 characters of a-z, 0-9 or '_'")
+	}
+	if p.Color != nil && *p.Color != "" {
+		if !validColor.MatchString(*p.Color) {
+			return nil, verr("color must be \"#rrggbb\" or empty")
+		}
+		c := strings.ToLower(*p.Color)
+		p.Color = &c
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	var curName, curSource string
-	err = tx.QueryRow(`SELECT name, source FROM entities WHERE id = ?`, id).Scan(&curName, &curSource)
+	var cur Entity
+	err = tx.QueryRow(`SELECT name, source, icon, color FROM entities WHERE id = ?`, id).
+		Scan(&cur.Name, &cur.Source, &cur.Icon, &cur.Color)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		if source == "" {
-			source = SourcePhone
+		if p.Name == nil {
+			return nil, verr("name is required to create entity %s", id)
+		}
+		source := SourcePhone
+		if p.Source != nil && *p.Source != "" {
+			source = *p.Source
+		}
+		icon, color := "", ""
+		if p.Icon != nil {
+			icon = *p.Icon
+		}
+		if p.Color != nil {
+			color = *p.Color
 		}
 		ts := now()
-		if _, err := tx.Exec(`INSERT INTO entities (id, name, source, created_at, updated_at) VALUES (?,?,?,?,?)`,
-			id, name, source, ts, ts); err != nil {
+		if _, err := tx.Exec(`INSERT INTO entities (id, name, source, icon, color, created_at, updated_at) VALUES (?,?,?,?,?,?,?)`,
+			id, *p.Name, source, icon, color, ts, ts); err != nil {
 			return nil, err
 		}
 	case err != nil:
 		return nil, err
 	default:
-		if source != "" && source != curSource {
-			return nil, verr("source cannot be changed (entity %s is %q)", id, curSource)
+		if p.Source != nil && *p.Source != "" && *p.Source != cur.Source {
+			return nil, verr("source cannot be changed (entity %s is %q)", id, cur.Source)
 		}
-		if name != curName {
-			if _, err := tx.Exec(`UPDATE entities SET name = ?, updated_at = ? WHERE id = ?`, name, now(), id); err != nil {
+		next := cur
+		if p.Name != nil {
+			next.Name = *p.Name
+		}
+		if p.Icon != nil {
+			next.Icon = *p.Icon
+		}
+		if p.Color != nil {
+			next.Color = *p.Color
+		}
+		if next != cur {
+			if _, err := tx.Exec(`UPDATE entities SET name = ?, icon = ?, color = ?, updated_at = ? WHERE id = ?`,
+				next.Name, next.Icon, next.Color, now(), id); err != nil {
 				return nil, err
 			}
 		}
@@ -266,13 +380,13 @@ func (s *Store) UpsertEntity(id, name, source string) (*Entity, error) {
 	return s.GetEntity(id)
 }
 
-const entityCols = `id, name, source, created_at, updated_at`
+const entityCols = `id, name, source, icon, color, created_at, updated_at`
 
 type scanner interface{ Scan(dest ...any) error }
 
 func scanEntity(r scanner) (*Entity, error) {
 	var e Entity
-	if err := r.Scan(&e.ID, &e.Name, &e.Source, &e.CreatedAt, &e.UpdatedAt); err != nil {
+	if err := r.Scan(&e.ID, &e.Name, &e.Source, &e.Icon, &e.Color, &e.CreatedAt, &e.UpdatedAt); err != nil {
 		return nil, err
 	}
 	e.CreatedAt, e.UpdatedAt = outTS(e.CreatedAt), outTS(e.UpdatedAt)

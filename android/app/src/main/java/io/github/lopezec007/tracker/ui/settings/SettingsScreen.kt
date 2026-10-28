@@ -1,7 +1,9 @@
-// Settings: the server, the name, the collection intervals and distance,
-// the entity poll interval, and About.
+// Settings: the server and its pinned identity, the name, this phone's icon
+// and colour, the collection intervals and distance, the entity poll
+// interval, the OsmAnd routing profile, and About.
 package io.github.lopezec007.tracker.ui.settings
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
@@ -17,6 +20,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -41,8 +45,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lopezec007.tracker.BuildConfig
+import io.github.lopezec007.tracker.data.sync.ServerIdentity
+import io.github.lopezec007.tracker.osmand.EntityAppearance
 import io.github.lopezec007.tracker.prefs.AppPrefs
 import io.github.lopezec007.tracker.ui.TrackerViewModel
+import io.github.lopezec007.tracker.ui.common.IconGlyphs
+import io.github.lopezec007.tracker.ui.common.IconPickerDialog
+import io.github.lopezec007.tracker.ui.common.entityTint
 import io.github.lopezec007.tracker.ui.nav.Nav
 import io.github.lopezec007.tracker.ui.nav.Screen
 import io.github.lopezec007.tracker.ui.theme.LocalPalette
@@ -53,6 +62,10 @@ fun SettingsScreen(vm: TrackerViewModel, nav: Nav) {
     val prefs by vm.prefs.collectAsStateWithLifecycle()
     val p = prefs ?: return
     val sync by vm.sync.collectAsStateWithLifecycle()
+    val poll by vm.poll.collectAsStateWithLifecycle()
+    val busy by vm.busy.collectAsStateWithLifecycle()
+    val me = poll.entities.firstOrNull { it.id == p.entityId }
+    var pickIcon by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -88,6 +101,26 @@ fun SettingsScreen(vm: TrackerViewModel, nav: Nav) {
                 OutlinedButton(onClick = { nav.push(Screen.Setup) }) { Text("Change…") }
             }
             Hint("Changing the address drops any fixes still queued for the old server.")
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Server identity", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        if (p.pinnedServerId.isBlank()) "not pinned yet — the first server that answers at the address is remembered"
+                        else p.pinnedServerId,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = LocalPalette.current.subtle,
+                    )
+                }
+                OutlinedButton(onClick = { vm.forgetServerIdentity() }, enabled = p.pinnedServerId.isNotBlank()) { Text("Forget") }
+            }
+            Hint(
+                "Only the server with this identity is ever sent anything; a different machine answering at the same address " +
+                    "(another network, or a rebuilt server database) is ignored and the fixes wait. Forget it only when you rebuilt " +
+                    "the server on purpose: the next one that answers is pinned.",
+            )
 
             HorizontalDivider()
             SectionTitle("Name")
@@ -98,6 +131,36 @@ fun SettingsScreen(vm: TrackerViewModel, nav: Nav) {
                 valid = { AppPrefs.cleanName(it).isNotBlank() },
                 onCommit = { vm.setName(it) },
             )
+
+            HorizontalDivider()
+            SectionTitle("My icon")
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    IconGlyphs.glyph(me?.icon.orEmpty()),
+                    contentDescription = null,
+                    tint = entityTint(me?.color.orEmpty(), MaterialTheme.colorScheme.primary),
+                    modifier = Modifier.size(32.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        when {
+                            me == null -> "unknown until the server has been reached"
+                            me.icon.isEmpty() && me.color.isEmpty() -> "default icon and colour"
+                            else -> listOfNotNull(
+                                me.icon.takeIf { it.isNotEmpty() }?.let { EntityAppearance.iconLabel(it) },
+                                me.color.takeIf { it.isNotEmpty() }?.let { c -> EntityAppearance.COLORS.firstOrNull { it.hex.equals(c, ignoreCase = true) }?.label ?: c },
+                            ).joinToString(", ")
+                        },
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text("Shown on everyone's map and in OsmAnd's context menu; anyone can change anyone's icon from the entity list.", style = MaterialTheme.typography.bodySmall, color = LocalPalette.current.subtle)
+                }
+                OutlinedButton(onClick = { pickIcon = true }, enabled = me != null && !busy) { Text("Change…") }
+            }
 
             HorizontalDivider()
             SectionTitle("Location")
@@ -140,9 +203,36 @@ fun SettingsScreen(vm: TrackerViewModel, nav: Nav) {
             )
 
             HorizontalDivider()
+            SectionTitle("OsmAnd")
+            Text("Routing profile for \"Go to\"", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (profile in AppPrefs.ROUTING_PROFILES) {
+                    FilterChip(
+                        selected = p.routingProfile == profile,
+                        onClick = { vm.setRoutingProfile(profile) },
+                        label = { Text(profile.replaceFirstChar { it.uppercase() }) },
+                    )
+                }
+            }
+            Hint("OsmAnd's own profile of that name is used; the route starts from this phone's position.")
+
+            HorizontalDivider()
             AboutSection()
             Spacer(Modifier.height(24.dp))
         }
+    }
+
+    if (pickIcon && me != null) {
+        IconPickerDialog(
+            title = "My icon",
+            initialIcon = me.icon,
+            initialColor = me.color,
+            onDismiss = { pickIcon = false },
+            onConfirm = { icon, color ->
+                pickIcon = false
+                vm.setAppearance(me.id, icon, color)
+            },
+        )
     }
 }
 

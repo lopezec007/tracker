@@ -1,5 +1,7 @@
 // GET /api/entities on a timer (the service loop) or on demand: the latest
 // fix of every entity, kept in memory for the Main screen and for OsmAnd.
+// Gated like everything else: the server's identity is checked (a probe,
+// or one reused from the last few seconds) before the list is asked for.
 package io.github.lopezec007.tracker.data.sync
 
 import io.github.lopezec007.tracker.data.api.ApiException
@@ -17,10 +19,13 @@ data class PollState(
     val lastSuccess: Long? = null,
     val lastError: String? = null,
     val polling: Boolean = false,
+    /** The last attempt was refused because a different server answered (the list kept is from the right one). */
+    val wrongServer: Boolean = false,
 )
 
 class EntityPoller(
     private val apiProvider: () -> TrackerApi?,
+    private val gate: ServerGate,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
     private val mutex = Mutex()
@@ -35,8 +40,19 @@ class EntityPoller(
         }
         _state.update { it.copy(polling = true) }
         try {
+            when (val g = gate.check(api)) {
+                is GateResult.Ok -> {}
+                is GateResult.Offline -> {
+                    _state.update { it.copy(lastError = g.reason, polling = false, wrongServer = false) }
+                    return false
+                }
+                is GateResult.WrongServer -> {
+                    _state.update { it.copy(lastError = g.reason, polling = false, wrongServer = true) }
+                    return false
+                }
+            }
             val list = api.listEntities().sortedBy { it.name.lowercase() }
-            _state.update { it.copy(entities = list, lastSuccess = now(), lastError = null, polling = false) }
+            _state.update { it.copy(entities = list, lastSuccess = now(), lastError = null, polling = false, wrongServer = false) }
             true
         } catch (e: IOException) {
             _state.update { it.copy(lastError = "server not reachable", polling = false) }

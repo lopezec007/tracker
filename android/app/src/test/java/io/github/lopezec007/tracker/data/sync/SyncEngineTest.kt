@@ -1,6 +1,8 @@
 // The queue against a fake server: batches of 500 in order, deletion only
 // after the server's acknowledgement, a 4xx dropping only the invalid fix,
-// a 404 re-creating the entity, and a network failure keeping everything.
+// a 404 re-creating the entity, a network failure keeping everything, and
+// the server identity: pinned on the first success, a different server
+// gets nothing (README "Server identity").
 // Runs on Robolectric so Room can be used in-memory; a plain Application
 // keeps the app's own Graph out.
 package io.github.lopezec007.tracker.data.sync
@@ -42,6 +44,11 @@ class SyncEngineTest {
     private var identity: Identity? = Identity("phone-1", "Evan")
     private var now = 1_792_692_000_000L
 
+    /** The fake server's identity and what the "phone" has pinned. */
+    private var serverId = "srv-1"
+    private var versionBody: () -> String = { """{"version":"9.9.9","date":"d","build":"b","app":"tracker","server_id":"$serverId"}""" }
+    private var pinned = ""
+
     /** A tiny fake server: entities by id -> name, every accepted fix's device_time in order. */
     private val entities = LinkedHashMap<String, String>()
     private val received = ArrayList<String>()
@@ -66,7 +73,7 @@ class SyncEngineTest {
                 val path = request.path ?: ""
                 val json = MockResponse().setHeader("Content-Type", "application/json")
                 return when {
-                    path == "/api/version" -> json.setBody("""{"version":"9.9.9","date":"d","build":"b"}""")
+                    path == "/api/version" -> json.setBody(versionBody())
                     path.startsWith("/api/entities/") && path.endsWith("/fixes") && request.method == "POST" -> {
                         val id = path.removePrefix("/api/entities/").removeSuffix("/fixes")
                         if (id !in entities) return json.setResponseCode(404).setBody("""{"error":"entity not found"}""")
@@ -91,8 +98,10 @@ class SyncEngineTest {
         }
         server.start()
         connect()
-        engine = SyncEngine(db, { api }, { identity }, now = { now })
+        engine = SyncEngine(db, { api }, { identity }, gate(), now = { now })
     }
+
+    private fun gate() = ServerGate({ api }, pinned = { pinned }, pin = { pinned = it }, now = { now })
 
     @After
     fun tearDown() {
@@ -127,6 +136,75 @@ class SyncEngineTest {
         assertEquals(now, s.lastSuccess)
         assertEquals("9.9.9", s.serverVersion)
         assertEquals(fix(1199).deviceTime, s.lastSentDeviceTime)
+        assertEquals("srv-1", pinned)  // pinned on the first success
+    }
+
+    @Test
+    fun aDifferentServerGetsNothingAndTheQueueIsKept() = runBlocking {
+        queue(3)
+        assertEquals(SyncResult.Done, engine.sync())
+        assertEquals("srv-1", pinned)
+        received.clear()
+        requests.clear()
+        // Same address, another machine (a rebuilt database, or another LAN).
+        serverId = "srv-2"
+        now += 60_000
+        queue(2)
+        val r = engine.sync()
+        assertTrue(r is SyncResult.WrongServer)
+        assertEquals(listOf("GET"), requests.map { it.method })  // probed, never PUT or POSTed
+        assertEquals(0, received.size)
+        assertEquals(2, db.pendingFixes().count())
+        assertEquals("srv-1", pinned)
+        val s = engine.state.value
+        assertEquals(SyncPhase.WRONG_SERVER, s.phase)
+        assertEquals(2, s.pending)
+        assertTrue(s.lastError!!.contains("a different server answered at"))
+        assertTrue(s.lastError!!.contains("fixes are kept"))
+        // The right server is back: everything goes.
+        serverId = "srv-1"
+        now += 60_000
+        requests.clear()
+        assertEquals(SyncResult.Done, engine.sync())
+        assertEquals(listOf("GET", "PUT", "POST"), requests.map { it.method })
+        assertEquals(2, received.size)
+        assertEquals(SyncPhase.IDLE, engine.state.value.phase)
+    }
+
+    @Test
+    fun aServerWithoutAnIdentityCountsAsOffline() = runBlocking {
+        versionBody = { """{"version":"0.0.1","date":"d","build":"b"}""" }  // an old tracker server
+        queue(1)
+        val r = engine.sync()
+        assertTrue(r is SyncResult.Offline)
+        assertTrue((r as SyncResult.Offline).reason.contains("no tracker server at this address"))
+        assertTrue(r.reason.contains("upgraded"))
+        assertEquals(listOf("GET"), requests.map { it.method })
+        assertEquals(1, db.pendingFixes().count())
+        assertEquals("", pinned)
+        assertEquals(SyncPhase.OFFLINE, engine.state.value.phase)
+        // Something that is not a tracker at all (another app's JSON) is the same.
+        versionBody = { """{"status":"ok","app":"other-thing","server_id":"x"}""" }
+        now += 60_000
+        assertTrue(engine.sync() is SyncResult.Offline)
+        assertEquals("", pinned)
+    }
+
+    @Test
+    fun forgettingTheIdentityPinsTheNextServer() = runBlocking {
+        queue(1)
+        assertEquals(SyncResult.Done, engine.sync())
+        assertEquals("srv-1", pinned)
+        serverId = "srv-2"
+        now += 60_000
+        queue(1)
+        assertTrue(engine.sync() is SyncResult.WrongServer)
+        // The user rebuilt the server on purpose: Settings → Forget server identity.
+        pinned = ""
+        now += 60_000
+        assertEquals(SyncResult.Done, engine.sync())
+        assertEquals("srv-2", pinned)
+        assertEquals(0, db.pendingFixes().count())
     }
 
     @Test
@@ -197,6 +275,7 @@ class SyncEngineTest {
         received.clear()
         requests.clear()
         queue(1)
+        now += 60_000  // past the gate's reuse window, so this run probes again
         // ...but PUT at the start of the run re-creates it, so the POST succeeds first time.
         assertEquals(SyncResult.Done, engine.sync())
         assertEquals(listOf("GET", "PUT", "POST"), requests.map { it.method })
@@ -213,7 +292,7 @@ class SyncEngineTest {
                 requests.add(request)
                 val json = MockResponse().setHeader("Content-Type", "application/json")
                 return when {
-                    request.path == "/api/version" -> json.setBody("""{"version":"1","date":"d","build":"b"}""")
+                    request.path == "/api/version" -> json.setBody("""{"version":"1","date":"d","build":"b","app":"tracker","server_id":"srv-1"}""")
                     request.method == "PUT" -> { puts++; json.setBody("""{"id":"phone-1","name":"Evan","source":"phone","created_at":"c","updated_at":"u","latest":null}""") }
                     request.method == "POST" -> if (puts >= 2) json.setResponseCode(201).setBody("""{"accepted":1,"latest":null}""") else json.setResponseCode(404).setBody("""{"error":"entity not found"}""")
                     else -> json.setResponseCode(404)

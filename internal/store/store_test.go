@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -353,6 +354,61 @@ func TestBackupBeforeMigration(t *testing.T) {
 	defer s3.Close()
 	if s3.LastBackup != "" {
 		t.Fatalf("no backup expected when up to date, got %s", s3.LastBackup)
+	}
+}
+
+// TestMigrateV1 opens a database laid out as schema version 1 and checks it
+// is upgraded in place with its data intact and a server id made.
+func TestMigrateV1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v1.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE entities (id TEXT PRIMARY KEY, name TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+		`CREATE TABLE fixes (id INTEGER PRIMARY KEY AUTOINCREMENT, entity_id TEXT NOT NULL REFERENCES entities(id), received_at TEXT NOT NULL, device_time TEXT, lat REAL NOT NULL, lon REAL NOT NULL, accuracy_m REAL, altitude_m REAL, speed_mps REAL, heading_deg REAL, battery_pct INTEGER, metadata TEXT)`,
+		`INSERT INTO entities VALUES ('old', 'Old', 'phone', '2026-10-22T00:00:00.000000000Z', '2026-10-22T00:00:00.000000000Z')`,
+		`INSERT INTO fixes (entity_id, received_at, lat, lon) VALUES ('old', '2026-10-22T00:00:01.000000000Z', 1, 2)`,
+		`PRAGMA user_version = 1`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if !strings.HasSuffix(s.LastBackup, "-v1") {
+		t.Fatalf("expected a v1 backup, got %q", s.LastBackup)
+	}
+	e, err := s.GetEntity("old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Name != "Old" || e.Icon != "" || e.Color != "" || e.Latest == nil || e.Latest.Lat != 1 {
+		t.Fatalf("migrated entity: %+v", e)
+	}
+	id, err := s.ServerID()
+	if err != nil || len(id) != 36 {
+		t.Fatalf("server id after migration: %q %v", id, err)
+	}
+	icon := "mx_shop_car"
+	if e, err = s.PutEntity("old", EntityPatch{Icon: &icon}); err != nil || e.Icon != icon {
+		t.Fatalf("icon after migration: %+v %v", e, err)
+	}
+	// Reopening is a no-op with the same id.
+	s.Close()
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if id2, _ := s2.ServerID(); id2 != id || s2.LastBackup != "" {
+		t.Fatalf("second open: id %s -> %s, backup %q", id, id2, s2.LastBackup)
 	}
 }
 

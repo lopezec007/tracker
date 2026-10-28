@@ -9,6 +9,7 @@ import io.github.lopezec007.tracker.data.api.TrackerApi
 import io.github.lopezec007.tracker.data.db.TrackerDatabase
 import io.github.lopezec007.tracker.data.sync.EntityPoller
 import io.github.lopezec007.tracker.data.sync.Identity
+import io.github.lopezec007.tracker.data.sync.ServerGate
 import io.github.lopezec007.tracker.data.sync.SyncEngine
 import io.github.lopezec007.tracker.data.sync.SyncScheduler
 import io.github.lopezec007.tracker.location.ServiceStatus
@@ -38,15 +39,18 @@ class Graph(app: Application) {
 
     fun api(): TrackerApi? = api
 
-    private fun setServer(url: String) {
+    private suspend fun setServer(url: String) {
         if (url == apiUrl) return
         apiUrl = url
         api = TrackerApi.parseBaseUrl(url)?.let { TrackerApi(it) }
+        gate.invalidate()
     }
 
-    val syncEngine = SyncEngine(db, { api }, { identity() })
+    /** Every request is gated by the server's pinned identity (README "Server identity"). */
+    val gate = ServerGate({ api }, pinned = { prefs.current().pinnedServerId }, pin = { prefs.setPinnedServerId(it) })
+    val syncEngine = SyncEngine(db, { api }, { identity() }, gate)
     val scheduler = SyncScheduler(app, syncEngine, scope)
-    val poller = EntityPoller({ api })
+    val poller = EntityPoller({ api }, gate)
     val osmand = OsmAndBridge(app)
     val notifier = TrackingNotifier(app)
 

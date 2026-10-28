@@ -1,6 +1,8 @@
 // First-run screen (also reached from Settings > Server > Change…): the
-// server address, a reachability probe against it, and the display name.
-// The address is the only host the app ever talks to (README "Network policy").
+// server address, a reachability probe against it (which must answer like a
+// tracker server with an identity, README "Server identity"), and the
+// display name. The address is the only host the app ever talks to (README
+// "Network policy"). Finish pins the identity the probe saw.
 package io.github.lopezec007.tracker.ui.setup
 
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +41,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lopezec007.tracker.data.api.TrackerApi
+import io.github.lopezec007.tracker.data.sync.ServerIdentity
 import io.github.lopezec007.tracker.prefs.AppPrefs
 import io.github.lopezec007.tracker.ui.TrackerViewModel
 import io.github.lopezec007.tracker.ui.theme.LocalPalette
@@ -57,7 +60,7 @@ private sealed class Probe {
     data class Unreachable(val address: String) : Probe()
     /** Something answered, but not like a tracker server. */
     data class Failed(val message: String) : Probe()
-    data class Found(val version: String) : Probe()
+    data class Found(val version: String, val serverId: String) : Probe()
 }
 
 /** The stored base URL as something short to type: no "http://", no trailing slash. */
@@ -90,14 +93,15 @@ fun SetupScreen(vm: TrackerViewModel, onDone: () -> Unit) {
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 try {
-                    Probe.Found(TrackerApi(parsed).probe().version)
+                    val v = TrackerApi(parsed).probe()
+                    if (ServerIdentity.isTracker(v)) Probe.Found(v.version, v.server_id) else Probe.Failed(ServerIdentity.NOT_A_TRACKER)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: IOException) {
                     val port = if (parsed.port != HttpUrl.defaultPort(parsed.scheme)) ":${parsed.port}" else ""
                     Probe.Unreachable(parsed.host + port)
                 } catch (e: Exception) {
-                    Probe.Failed(e.message ?: e.toString())
+                    Probe.Failed("that address does not answer like a tracker server: ${e.message ?: e}")
                 }
             }
             probe = result
@@ -108,7 +112,8 @@ fun SetupScreen(vm: TrackerViewModel, onDone: () -> Unit) {
         val u = url ?: return
         if (!nameOk) return
         vm.setName(name)
-        vm.setServer(u.toString())
+        // Pin what the probe saw; "Use anyway" pins nothing (the first successful probe will).
+        vm.setServer(u.toString(), (probe as? Probe.Found)?.serverId ?: "")
         onDone()
     }
 
@@ -196,7 +201,7 @@ fun SetupScreen(vm: TrackerViewModel, onDone: () -> Unit) {
                 }
                 is Probe.Failed -> {
                     Text(
-                        "That address does not answer like a tracker server: ${s.message}",
+                        s.message.replaceFirstChar { it.uppercase() },
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodyMedium,
                         textAlign = TextAlign.Center,
@@ -209,6 +214,12 @@ fun SetupScreen(vm: TrackerViewModel, onDone: () -> Unit) {
                         "Tracker ${s.version.ifBlank { "?" }} found",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        "Server identity ${ServerIdentity.shortId(s.serverId)}… will be remembered; a different server at this address is never sent anything.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = LocalPalette.current.subtle,
+                        textAlign = TextAlign.Center,
                     )
                     Spacer(Modifier.height(16.dp))
                     Button(onClick = { finish() }, enabled = nameOk, modifier = Modifier.fillMaxWidth()) { Text("Finish") }

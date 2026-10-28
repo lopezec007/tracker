@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The point icons the app renders for OsmAnd (osmand/PointIcons.kt) are
+     served to it from the cache directory through the FileProvider. -->
+<paths>
+    <cache-path name="point-icons" path="point-icons/" />
+</paths>
